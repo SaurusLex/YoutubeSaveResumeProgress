@@ -115,7 +115,7 @@
     window.localStorage.setItem(idToStore, JSON.stringify(progressData))
   }
   function getSavedVideoList() {
-    const savedVideoList = Object.keys(window.localStorage).filter(key => key.includes('Youtube_SaveResume_Progress-'))
+    const savedVideoList = Object.entries(window.localStorage).filter(([key, value]) => key.includes('Youtube_SaveResume_Progress-'))
     return savedVideoList
   }
 
@@ -209,22 +209,62 @@
       }
     })
   }
-
+  
   function createSettingsUI() {
+    const videos = getSavedVideoList()
+    const videosCount = videos.length
     const infoElContainer = document.querySelector('.last-save-info-container')
     const infoElContainerPosition = infoElContainer.getBoundingClientRect()
     const settingsContainer = document.createElement('div')
     settingsContainer.classList.add('settings-container')
 
-    settingsContainer.style.position = 'absolute'
-    settingsContainer.style.top = '0'
-    settingsContainer.style.display = 'none'
-    settingsContainer.style.top = infoElContainerPosition.bottom + 'px'
-    settingsContainer.style.left = infoElContainerPosition.left + 'px'
-    settingsContainer.style.width = infoElContainerPosition.width + 'px'
-    settingsContainer.style.height = '20rem'
-    settingsContainer.style.background = 'white'
-    settingsContainer.style.zIndex = '3000'
+    const settingsContainerHeader = document.createElement('h3')
+    settingsContainerHeader.textContent = 'Saved Videos - (' + videosCount + ')'
+    settingsContainerHeader.style.display = 'flex'
+    settingsContainerHeader.style.justifyContent = 'space-between'
+
+    const settingsContainerBody = document.createElement('div')
+    const videosList = document.createElement('ul')
+    videosList.style.display = 'flex'
+    videosList.style.flexDirection = 'column'
+    videosList.style.rowGap = '1rem'
+    videosList.style.listStyle = 'none'
+
+    videos.forEach(video => {
+      const [key, value] = video
+      const { videoName } = JSON.parse(value)
+      const videoEl = document.createElement('li')
+      videoEl.textContent = videoName
+      videosList.appendChild(videoEl)
+    })
+
+    const settingsContainerCloseButton = document.createElement('button')
+    settingsContainerCloseButton.textContent = 'x'
+    settingsContainerCloseButton.addEventListener('click', () => {
+      settingsContainer.style.display = 'none'
+    })
+
+    const settingsContainerStyles = {
+      all: 'initial',
+      position: 'absolute',
+      fontFamily: 'inherit',
+      top: '0',
+      display: 'none',
+      top: infoElContainerPosition.bottom + 'px',
+      left: infoElContainerPosition.left + 'px',
+      padding: '1rem',
+      width: "50rem",
+      height: '25rem',
+      borderRadius: '.5rem',
+      background: 'white',
+      zIndex: '3000'
+    }
+
+    Object.assign(settingsContainer.style, settingsContainerStyles)
+    settingsContainerBody.appendChild(videosList)
+    settingsContainerHeader.appendChild(settingsContainerCloseButton)
+    settingsContainer.appendChild(settingsContainerHeader)
+    settingsContainer.appendChild(settingsContainerBody)
     document.body.appendChild(settingsContainer)
 
     const savedVideos = getSavedVideoList()
