@@ -21,7 +21,18 @@
     lastSaveTime: 0
   }
 
+  var FontAwesomeIcons = {
+    trash: ['fa-solid', 'fa-trash-can']
+  }
 
+  function createIcon(iconName, color) {
+    const icon = document.createElement('i')
+    const cssClasses = FontAwesomeIcons[iconName]
+    icon.classList.add(...cssClasses)
+    icon.style.color = color
+    
+    return icon
+  }
   // ref: https://stackoverflow.com/questions/3733227/javascript-seconds-to-minutes-and-seconds
   function fancyTimeFormat(duration) {
     // Hours, minutes and seconds
@@ -218,8 +229,9 @@
     const settingsContainer = document.createElement('div')
     settingsContainer.classList.add('settings-container')
 
-    const settingsContainerHeader = document.createElement('h3')
-    settingsContainerHeader.textContent = 'Saved Videos - (' + videosCount + ')'
+    const settingsContainerHeader = document.createElement('div')
+    const settingsContainerHeaderTitle = document.createElement('h3')
+    settingsContainerHeaderTitle.textContent = 'Saved Videos - (' + videosCount + ')'
     settingsContainerHeader.style.display = 'flex'
     settingsContainerHeader.style.justifyContent = 'space-between'
 
@@ -229,12 +241,36 @@
     videosList.style.flexDirection = 'column'
     videosList.style.rowGap = '1rem'
     videosList.style.listStyle = 'none'
+    videosList.style.marginTop = '1rem'
 
     videos.forEach(video => {
       const [key, value] = video
       const { videoName } = JSON.parse(value)
       const videoEl = document.createElement('li')
-      videoEl.textContent = videoName
+      const videoElText = document.createElement('span')
+      videoEl.style.display = 'flex'
+      videoEl.style.alignItems = 'center'
+
+      videoElText.textContent = videoName
+      videoElText.style.flex = '1'
+
+      const deleteButton = document.createElement('button')
+      const trashIcon = createIcon('trash', '#e74c3c')
+      deleteButton.style.background = 'white'
+      deleteButton.style.border = 'rgba(0, 0, 0, 0.3) 1px solid'
+      deleteButton.style.borderRadius = '.5rem'
+      deleteButton.style.marginLeft = '1rem'
+      deleteButton.style.cursor = 'pointer'
+      
+      deleteButton.addEventListener('click', () => {
+        window.localStorage.removeItem(key)
+        videosList.removeChild(videoEl)
+        settingsContainerHeaderTitle.textContent = 'Saved Videos - (' + (videosList.children.length) + ')'
+      })
+
+      deleteButton.appendChild(trashIcon)
+      videoEl.appendChild(videoElText)
+      videoEl.appendChild(deleteButton)
       videosList.appendChild(videoEl)
     })
 
@@ -262,6 +298,7 @@
 
     Object.assign(settingsContainer.style, settingsContainerStyles)
     settingsContainerBody.appendChild(videosList)
+    settingsContainerHeader.appendChild(settingsContainerHeaderTitle)
     settingsContainerHeader.appendChild(settingsContainerCloseButton)
     settingsContainer.appendChild(settingsContainerHeader)
     settingsContainer.appendChild(settingsContainerBody)
