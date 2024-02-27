@@ -195,7 +195,7 @@
     const settingsContainer = document.querySelector('.settings-container')
     const { flip, computePosition } = window.FloatingUIDOM
     computePosition(settingsButton, settingsContainer, { 
-      placement: 'bottom',
+      placement: 'top',
       middleware: [flip()]
     }).then(({x, y}) => {
       Object.assign(settingsContainer.style, {
@@ -214,8 +214,8 @@
     executeFnInPageContext(updateFloatingSettingsUi)
 
     settingsButton.addEventListener('click', () => {
-      settingsContainer.style.display = settingsContainer.style.display === 'none' ? 'block' : 'none'
-      if (settingsContainer.style.display === 'block') {
+      settingsContainer.style.display = settingsContainer.style.display === 'none' ? 'flex' : 'none'
+      if (settingsContainer.style.display === 'flex') {
         executeFnInPageContext(updateFloatingSettingsUi)
       }
     })
@@ -236,6 +236,15 @@
     settingsContainerHeader.style.justifyContent = 'space-between'
 
     const settingsContainerBody = document.createElement('div')
+    settingsContainerBody.classList.add('settings-container-body')
+    const settingsContainerBodyStyle = {
+      display: 'flex',
+      flex: '1',
+      minHeight: '0',
+      overflow: 'scroll'
+    }
+    Object.assign(settingsContainerBody.style, settingsContainerBodyStyle)
+
     const videosList = document.createElement('ul')
     videosList.style.display = 'flex'
     videosList.style.flexDirection = 'column'
@@ -284,8 +293,11 @@
       all: 'initial',
       position: 'absolute',
       fontFamily: 'inherit',
+      flexDirection: 'column',
       top: '0',
       display: 'none',
+      boxShadow: 'rgba(0, 0, 0, 0.24) 0px 3px 8px',
+      border: '1px solid #d5d5d5',
       top: infoElContainerPosition.bottom + 'px',
       left: infoElContainerPosition.left + 'px',
       padding: '1rem',
