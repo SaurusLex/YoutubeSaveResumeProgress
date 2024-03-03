@@ -18,7 +18,12 @@
     savedProgressAlreadySet: false,
     savingInterval: 1500,
     currentVideoId: null,
-    lastSaveTime: 0
+    lastSaveTime: 0,
+    dependenciesURLs: {
+      floatingUiCore: 'https://cdn.jsdelivr.net/npm/@floating-ui/core@1.6.0',
+      floatingUiDom: 'https://cdn.jsdelivr.net/npm/@floating-ui/dom@1.6.3',
+      fontAwesomeIcons: 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css'
+    }
   }
 
   var FontAwesomeIcons = {
@@ -366,28 +371,17 @@
     await waitForElm('.ytp-chapter-container[style=""]')
     callback()
   }
-  
-  function initializeUI() {
-    const infoEl = createInfoUI()
-    insertInfoElement(infoEl)
-    createSettingsUI()
 
-    let head = document.getElementsByTagName('HEAD')[0];
-    let iconsUi = document.createElement('link');
-    iconsUi.rel = 'stylesheet';
-    iconsUi.type = 'text/css';
-    iconsUi.href = 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css';
+  function addFontawesomeIcons() {
+    const head = document.getElementsByTagName('HEAD')[0];
+    const iconsUi = document.createElement('link');
+    Object.assign(iconsUi, {
+      rel: 'stylesheet',
+      type: 'text/css',
+      href: configData.dependenciesURLs.fontAwesomeIcons
+    })
+
     head.appendChild(iconsUi);
-    
-    const floatingUiCore = document.createElement('script')
-    const floatingUiDom = document.createElement('script')
-    floatingUiCore.src = 'https://cdn.jsdelivr.net/npm/@floating-ui/core@1.6.0'
-    floatingUiDom.src = 'https://cdn.jsdelivr.net/npm/@floating-ui/dom@1.6.3'
-    document.body.appendChild(floatingUiCore)
-    document.body.appendChild(floatingUiDom)
-    let floatingUiCoreLoaded = false
-    let floatingUiDomLoaded = false
-		
     iconsUi.addEventListener('load', () => {
       const icon = document.createElement('span')
       
@@ -395,8 +389,17 @@
       settingsButton.appendChild(icon)
       icon.classList.add('fa-solid')
       icon.classList.add('fa-gear')
-      
     })
+  }
+  function addFloatingUIDependency() {
+    const floatingUiCore = document.createElement('script')
+    const floatingUiDom = document.createElement('script')
+    floatingUiCore.src = configData.dependenciesURLs.floatingUiCore
+    floatingUiDom.src = configData.dependenciesURLs.floatingUiDom
+    document.body.appendChild(floatingUiCore)
+    document.body.appendChild(floatingUiDom)
+    let floatingUiCoreLoaded = false
+    let floatingUiDomLoaded = false
     
     floatingUiCore.addEventListener('load', () => {
       floatingUiCoreLoaded = true
@@ -410,6 +413,19 @@
         setFloatingSettingsUi()
       }
     })
+  }
+
+  function initializeDependencies() {
+    addFontawesomeIcons()
+    addFloatingUIDependency()
+  }
+  
+  function initializeUI() {
+    const infoEl = createInfoUI()
+    insertInfoElement(infoEl)
+    createSettingsUI()
+
+    initializeDependencies()
 
     onChaptersReadyToMount(() => {
       insertInfoElementInChaptersContainer(infoEl)
