@@ -2,21 +2,22 @@
 // @license MIT
 // @name         Youtube Save/Resume Progress
 // @namespace    http://tampermonkey.net/
-// @version      1.5
+// @version      1.5.1
 // @description  Have you ever closed a YouTube video by accident, or have you gone to another one and when you come back the video starts from 0? With this extension it won't happen anymore
 // @author       Costin Alexandru Sandu
 // @match        https://www.youtube.com/watch*
 // @icon         https://tse4.mm.bing.net/th/id/OIG3.UOFNuEtdysdoeX0tMsVU?pid=ImgGn
 // @grant        none
-// @downloadURL https://update.greasyfork.org/scripts/487305/YoutubePlayBack.user.js
-// @updateURL https://update.greasyfork.org/scripts/487305/YoutubePlayBack.meta.js
+// @downloadURL https://update.greasyfork.org/scripts/487305/Youtube%20SaveResume%20Progress.user.js
+// @updateURL https://update.greasyfork.org/scripts/487305/Youtube%20SaveResume%20Progress.meta.js
 // ==/UserScript==
 
 (function () {
   'strict'
   var configData = {
+    sanitizer: null,
     savedProgressAlreadySet: false,
-    savingInterval: 1500,
+    savingInterval: 2000,
     currentVideoId: null,
     lastSaveTime: 0,
     dependenciesURLs: {
@@ -58,24 +59,22 @@
     return ret;
   }
 
-  function executeFnInPageContext(fn) {
+  /*function executeFnInPageContext(fn) {
     const fnStringified = fn.toString()
     return window.eval('(' + fnStringified + ')' + '()')
-  }
+  }*/
 
   function getVideoCurrentTime() {
-    const currentTime = executeFnInPageContext(() => {
-      const player = document.querySelector('#movie_player')
-      return player.getCurrentTime()
-    })
+    const player = document.querySelector('#movie_player')
+    const currentTime = player.getCurrentTime()
+
     return currentTime
   }
 
   function getVideoName() {
-    const videoName = executeFnInPageContext(() => {
-      const player = document.querySelector('#movie_player')
-      return player.getVideoData().title
-    })
+    const player = document.querySelector('#movie_player')
+    const videoName = player.getVideoData().title
+
     return videoName
   }
 
@@ -83,44 +82,40 @@
     if (configData.currentVideoId) {
       return configData.currentVideoId
     }
-    const id = executeFnInPageContext(() => {
-      const player = document.querySelector('#movie_player')
-      return player.getVideoData().video_id
-    })
+    const player = document.querySelector('#movie_player')
+    const id = player.getVideoData().video_id
+
     return id
   }
 
   function playerExists() {
-    const exists = executeFnInPageContext(() => {
-      const player = document.querySelector('#movie_player')
-      return Boolean(player)
-    })
+    const player = document.querySelector('#movie_player')
+    const exists =Boolean(player)
+
     return exists
   }
 
   function setVideoProgress(progress) {
-    window.eval('var progress =' + progress)
-    executeFnInPageContext(() => {
-      const player = document.querySelector('#movie_player')
-      player.seekTo(window.progress)
-    })
-    window.eval('delete progress')
+    const player = document.querySelector('#movie_player')
+
+    player.seekTo(progress)
   }
 
   function updateLastSaved(videoProgress) {
     const lastSaveEl = document.querySelector('.last-save-info-text')
+    const lastSaveInnerHtml = configData.sanitizer.createHTML("Last save at " + fancyTimeFormat(videoProgress))
     if (lastSaveEl) {
-      lastSaveEl.innerHTML = "Last save at " + fancyTimeFormat(videoProgress)
+      lastSaveEl.innerHTML = lastSaveInnerHtml
     }
   }
 
   function saveVideoProgress() {
     const videoProgress = getVideoCurrentTime()
+    updateLastSaved(videoProgress)
     const videoId = getVideoId()
 
     configData.currentVideoId = videoId
     configData.lastSaveTime = Date.now()
-    updateLastSaved(videoProgress)
     const idToStore = 'Youtube_SaveResume_Progress-' + videoId
     const progressData = {
       videoProgress,
@@ -189,6 +184,8 @@
   function insertInfoElement(element) {
     const leftControls = document.querySelector('.ytp-left-controls')
     leftControls.appendChild(element)
+    const chaptersContainerElelement = document.querySelector('.ytp-chapter-container')
+    chaptersContainerElelement.style.flexBasis = 'auto'
   }
   function insertInfoElementInChaptersContainer(element) {
     const chaptersContainer = document.querySelector('.ytp-chapter-container[style=""]')
@@ -216,12 +213,12 @@
     const settingsButton = document.querySelector('.ysrp-settings-button')
     const settingsContainer = document.querySelector('.settings-container')
 
-    executeFnInPageContext(updateFloatingSettingsUi)
+    updateFloatingSettingsUi()
 
     settingsButton.addEventListener('click', () => {
       settingsContainer.style.display = settingsContainer.style.display === 'none' ? 'flex' : 'none'
       if (settingsContainer.style.display === 'flex') {
-        executeFnInPageContext(updateFloatingSettingsUi)
+        updateFloatingSettingsUi()
       }
     })
   }
@@ -345,7 +342,7 @@
     infoElText.textContent = "Last save at :"
     infoElText.classList.add('last-save-info-text')
     infoEl.appendChild(infoElText)
-    infoEl.appendChild(settingsButton)
+    //infoEl.appendChild(settingsButton)
 
 
 
@@ -385,10 +382,10 @@
     iconsUi.addEventListener('load', () => {
       const icon = document.createElement('span')
       
-      const settingsButton = document.querySelector('.ysrp-settings-button')
-      settingsButton.appendChild(icon)
-      icon.classList.add('fa-solid')
-      icon.classList.add('fa-gear')
+      //const settingsButton = document.querySelector('.ysrp-settings-button')
+      //settingsButton.appendChild(icon)
+      //icon.classList.add('fa-solid')
+      //icon.classList.add('fa-gear')
     })
   }
   function addFloatingUIDependency() {
@@ -423,7 +420,7 @@
   function initializeUI() {
     const infoEl = createInfoUI()
     insertInfoElement(infoEl)
-    createSettingsUI()
+    // createSettingsUI()
 
     initializeDependencies()
 
@@ -436,6 +433,14 @@
   
 
   function initialize() {
+    if (window.trustedTypes && window.trustedTypes.createPolicy && !window.trustedTypes.defaultPolicy) {
+        const sanitizer = window.trustedTypes.createPolicy('default', {
+          createHTML: (string, sink) => string
+        });
+
+        configData.sanitizer = sanitizer
+      }
+
     onPlayerElementExist(() => {
       initializeUI()
       if (isReadyToSetSavedProgress()) {
