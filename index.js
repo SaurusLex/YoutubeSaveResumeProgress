@@ -2,7 +2,7 @@
 // @license MIT
 // @name         Youtube Save/Resume Progress
 // @namespace    http://tampermonkey.net/
-// @version      1.5.3
+// @version      1.5.4
 // @description  Have you ever closed a YouTube video by accident, or have you gone to another one and when you come back the video starts from 0? With this extension it won't happen anymore
 // @author       Costin Alexandru Sandu
 // @match        https://www.youtube.com/watch*
@@ -410,11 +410,12 @@
         setFloatingSettingsUi()
       }
     })
-  }
 
+  }
   function initializeDependencies() {
     addFontawesomeIcons()
-    addFloatingUIDependency()
+    // FIXME: floating ui is not working for now
+    //addFloatingUIDependency()
   }
   
   function initializeUI() {
