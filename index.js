@@ -2,7 +2,7 @@
 // @license MIT
 // @name         Youtube Save/Resume Progress
 // @namespace    http://tampermonkey.net/
-// @version      1.5.5
+// @version      1.5.6
 // @description  Have you ever closed a YouTube video by accident, or have you gone to another one and when you come back the video starts from 0? With this extension it won't happen anymore
 // @author       Costin Alexandru Sandu
 // @match        https://www.youtube.com/watch*
@@ -30,6 +30,7 @@
 
   var FontAwesomeIcons = {
     trash: ["fa-solid", "fa-trash-can"],
+    xmark: ["fa-solid", "fa-xmark"],
   };
 
   function createIcon(iconName, color) {
@@ -37,6 +38,7 @@
     const cssClasses = FontAwesomeIcons[iconName];
     icon.classList.add(...cssClasses);
     icon.style.color = color;
+    icon.style.fontSize = "16px";
 
     return icon;
   }
@@ -261,7 +263,7 @@
       display: "flex",
       flex: "1",
       minHeight: "0",
-      overflow: "scroll",
+      overflow: "auto",
     };
     Object.assign(settingsContainerBody.style, settingsContainerBodyStyle);
 
@@ -271,6 +273,7 @@
     videosList.style.rowGap = "1rem";
     videosList.style.listStyle = "none";
     videosList.style.marginTop = "1rem";
+    videosList.style.flex = "1";
 
     videos.forEach((video) => {
       const [key, value] = video;
@@ -305,7 +308,12 @@
     });
 
     const settingsContainerCloseButton = document.createElement("button");
-    settingsContainerCloseButton.textContent = "x";
+    settingsContainerCloseButton.style.background = "transparent";
+    settingsContainerCloseButton.style.border = "none";
+    settingsContainerCloseButton.style.cursor = "pointer";
+
+    const xmarkIcon = createIcon("xmark", "#e74c3c");
+    settingsContainerCloseButton.appendChild(xmarkIcon);
     settingsContainerCloseButton.addEventListener("click", () => {
       settingsContainer.style.display = "none";
     });
@@ -358,7 +366,7 @@
     infoElText.textContent = "Last save: Loading...";
     infoElText.classList.add("last-save-info-text");
     infoEl.appendChild(infoElText);
-    //infoEl.appendChild(settingsButton)
+    infoEl.appendChild(settingsButton)
 
     infoElContainer.style.all = "initial";
     infoElContainer.style.fontFamily = "inherit";
@@ -396,21 +404,27 @@
     iconsUi.addEventListener("load", () => {
       const icon = document.createElement("span");
 
-      //const settingsButton = document.querySelector('.ysrp-settings-button')
-      //settingsButton.appendChild(icon)
-      //icon.classList.add('fa-solid')
-      //icon.classList.add('fa-gear')
+      const settingsButton = document.querySelector('.ysrp-settings-button')
+      settingsButton.appendChild(icon)
+      icon.classList.add('fa-solid')
+      icon.classList.add('fa-gear')
     });
   }
+
+  function sanitizeScriptUrl(url) {
+    return configData.sanitizer ? configData.sanitizer.createScriptURL(url) : url;
+  }
+
   function addFloatingUIDependency() {
     const floatingUiCore = document.createElement("script");
     const floatingUiDom = document.createElement("script");
-    floatingUiCore.src = configData.dependenciesURLs.floatingUiCore;
-    floatingUiDom.src = configData.dependenciesURLs.floatingUiDom;
+    floatingUiCore.src = sanitizeScriptUrl(configData.dependenciesURLs.floatingUiCore);
+    floatingUiDom.src = sanitizeScriptUrl(configData.dependenciesURLs.floatingUiDom);
     document.body.appendChild(floatingUiCore);
     document.body.appendChild(floatingUiDom);
     let floatingUiCoreLoaded = false;
     let floatingUiDomLoaded = false;
+
 
     floatingUiCore.addEventListener("load", () => {
       floatingUiCoreLoaded = true;
@@ -428,13 +442,13 @@
   function initializeDependencies() {
     addFontawesomeIcons();
     // FIXME: floating ui is not working for now
-    //addFloatingUIDependency()
+    addFloatingUIDependency()
   }
 
   function initializeUI() {
     const infoEl = createInfoUI();
     insertInfoElement(infoEl);
-    // createSettingsUI()
+    createSettingsUI()
 
     initializeDependencies();
 
@@ -452,6 +466,8 @@
     ) {
       const sanitizer = window.trustedTypes.createPolicy("default", {
         createHTML: (string, sink) => string,
+        createScript: (string, sink) => string,
+        createScriptURL: (string, sink) => string,
       });
 
       configData.sanitizer = sanitizer;
