@@ -2,7 +2,7 @@
 // @license MIT
 // @name         Youtube Save/Resume Progress
 // @namespace    http://tampermonkey.net/
-// @version      1.5.6
+// @version      1.5.7
 // @description  Have you ever closed a YouTube video by accident, or have you gone to another one and when you come back the video starts from 0? With this extension it won't happen anymore
 // @author       Costin Alexandru Sandu
 // @match        https://www.youtube.com/watch*
@@ -25,8 +25,15 @@
       floatingUiDom: "https://cdn.jsdelivr.net/npm/@floating-ui/dom@1.6.3",
       fontAwesomeIcons:
         "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css",
-    },
+    }
   };
+
+  var state = {
+    floatingUi: {
+      cleanUpFn: null,
+      settingsContainer: null,
+    }
+  }
 
   var FontAwesomeIcons = {
     trash: ["fa-solid", "fa-trash-can"],
@@ -229,17 +236,37 @@
 
   function setFloatingSettingsUi() {
     const settingsButton = document.querySelector(".ysrp-settings-button");
-    const settingsContainer = document.querySelector(".settings-container");
-
-    updateFloatingSettingsUi();
+    const settingsContainer = state.floatingUi.settingsContainer
+    const { autoUpdate } = window.FloatingUIDOM;
 
     settingsButton.addEventListener("click", () => {
-      settingsContainer.style.display =
-        settingsContainer.style.display === "none" ? "flex" : "none";
-      if (settingsContainer.style.display === "flex") {
-        updateFloatingSettingsUi();
+      const exists = document.body.contains(settingsContainer)
+      if (exists) {
+        closeFloatingSettingsUi()
+      } else {
+          document.body.appendChild(settingsContainer);
+          updateFloatingSettingsUi();
+          state.floatingUi.cleanUpFn = autoUpdate(settingsButton, settingsContainer, updateFloatingSettingsUi);
+          document.addEventListener('click', closeFloatingSettingsUiOnClickOutside)
       }
+
     });
+  }
+
+  function closeFloatingSettingsUiOnClickOutside(event) {
+      const settingsButton = document.querySelector(".ysrp-settings-button");
+      const settingsContainer = state.floatingUi.settingsContainer
+      if (settingsContainer && !settingsContainer.contains(event.target) && !settingsButton.contains(event.target)) {
+          closeFloatingSettingsUi();
+          document.removeEventListener('click', closeFloatingSettingsUiOnClickOutside);
+      }
+  }
+
+  function closeFloatingSettingsUi() {
+      const settingsContainer = state.floatingUi.settingsContainer
+      settingsContainer.remove()
+      state.floatingUi.cleanUpFn()
+      state.floatingUi.cleanUpFn = null
   }
 
   function createSettingsUI() {
@@ -248,6 +275,8 @@
     const infoElContainer = document.querySelector(".last-save-info-container");
     const infoElContainerPosition = infoElContainer.getBoundingClientRect();
     const settingsContainer = document.createElement("div");
+    settingsContainer.addEventListener('click', (event) => {event.stopPropagation()})
+    state.floatingUi.settingsContainer = settingsContainer
     settingsContainer.classList.add("settings-container");
 
     const settingsContainerHeader = document.createElement("div");
@@ -315,7 +344,7 @@
     const xmarkIcon = createIcon("xmark", "#e74c3c");
     settingsContainerCloseButton.appendChild(xmarkIcon);
     settingsContainerCloseButton.addEventListener("click", () => {
-      settingsContainer.style.display = "none";
+        closeFloatingSettingsUi()
     });
 
     const settingsContainerStyles = {
@@ -324,7 +353,7 @@
       fontFamily: "inherit",
       flexDirection: "column",
       top: "0",
-      display: "none",
+      display: "flex",
       boxShadow: "rgba(0, 0, 0, 0.24) 0px 3px 8px",
       border: "1px solid #d5d5d5",
       top: infoElContainerPosition.bottom + "px",
@@ -343,7 +372,6 @@
     settingsContainerHeader.appendChild(settingsContainerCloseButton);
     settingsContainer.appendChild(settingsContainerHeader);
     settingsContainer.appendChild(settingsContainerBody);
-    document.body.appendChild(settingsContainer);
 
     const savedVideos = getSavedVideoList();
     const savedVideosList = document.createElement("ul");
