@@ -2,7 +2,7 @@
 // @license MIT
 // @name         Youtube Save/Resume Progress
 // @namespace    http://tampermonkey.net/
-// @version      1.7.0
+// @version      1.7.1
 // @description  Have you ever closed a YouTube video by accident, or have you gone to another one and when you come back the video starts from 0? With this extension it won't happen anymore
 // @author       Costin Alexandru Sandu
 // @match        https://www.youtube.com/watch*
@@ -150,17 +150,36 @@
     }
     .ysrp-video-item {
       display: flex;
-      align-items: center;
+      align-items: flex-start;
       background: #fff;
-      padding: 0.5rem;
+      padding: 0.8rem;
       border-bottom: 1px solid #f0f0f0;
+      gap: 1rem;
+    }
+    .ysrp-video-info {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+      overflow: hidden;
     }
     .ysrp-video-name {
-      flex: 1;
       white-space: nowrap;
       overflow: hidden;
       text-overflow: ellipsis;
-      margin-right: 1rem;
+      font-weight: 500;
+      color: #333;
+      text-decoration: none;
+    }
+    .ysrp-video-name:hover {
+      text-decoration: underline;
+      color: #000;
+    }
+    .ysrp-video-meta {
+      font-size: 12px;
+      color: #777;
+      display: flex;
+      gap: 15px;
     }
     .ysrp-delete-button {
       background: white;
@@ -663,6 +682,12 @@
 
     function renderSavedVideosView(onTitleUpdate) {
       const videos = getSavedVideoList();
+      
+      // Sort videos by most recent save date
+      const sortedVideos = videos
+        .map(([key, value]) => ({ key, data: JSON.parse(value) }))
+        .sort((a, b) => (b.data.saveDate || 0) - (a.data.saveDate || 0));
+
       const body = document.createElement("div");
       body.classList.add("ysrp-videos-list-container");
 
@@ -673,15 +698,35 @@
         onTitleUpdate(`Saved Videos - (${videosList.children.length})`);
       };
 
-      videos.forEach((video) => {
-        const [key, value] = video;
-        const { videoName } = JSON.parse(value);
+      sortedVideos.forEach(({ key, data }) => {
+        const { videoName, videoProgress, saveDate } = data;
+        const videoId = key.replace("Youtube_SaveResume_Progress-", "");
+        
         const videoEl = document.createElement("li");
         videoEl.classList.add("ysrp-video-item");
 
-        const videoElText = document.createElement("span");
-        videoElText.textContent = videoName;
-        videoElText.classList.add("ysrp-video-name");
+        const infoContainer = document.createElement("div");
+        infoContainer.classList.add("ysrp-video-info");
+
+        const videoLink = document.createElement("a");
+        videoLink.textContent = videoName;
+        videoLink.classList.add("ysrp-video-name");
+        videoLink.href = `https://www.youtube.com/watch?v=${videoId}`;
+        videoLink.target = "_blank";
+        videoLink.rel = "noopener noreferrer";
+
+        const metaContainer = document.createElement("div");
+        metaContainer.classList.add("ysrp-video-meta");
+
+        const progressSpan = document.createElement("span");
+        progressSpan.textContent = `Progress: ${fancyTimeFormat(videoProgress)}`;
+
+        const dateSpan = document.createElement("span");
+        const dateObj = new Date(saveDate);
+        dateSpan.textContent = `Saved: ${dateObj.toLocaleDateString()} ${dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+
+        metaContainer.append(progressSpan, dateSpan);
+        infoContainer.append(videoLink, metaContainer);
 
         const deleteButton = document.createElement("button");
         deleteButton.classList.add("ysrp-delete-button");
@@ -694,7 +739,7 @@
         });
 
         deleteButton.appendChild(trashIcon);
-        videoEl.append(videoElText, deleteButton);
+        videoEl.append(infoContainer, deleteButton);
         videosList.appendChild(videoEl);
       });
 
