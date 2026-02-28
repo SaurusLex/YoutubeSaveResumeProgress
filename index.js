@@ -2,7 +2,7 @@
 // @license MIT
 // @name         Youtube Save/Resume Progress
 // @namespace    http://tampermonkey.net/
-// @version      1.9.0
+// @version      1.9.1
 // @description  Have you ever closed a YouTube video by accident, or have you gone to another one and when you come back the video starts from 0? With this extension it won't happen anymore
 // @author       Costin Alexandru Sandu
 // @match        https://www.youtube.com/watch*
@@ -22,6 +22,7 @@
     savedProgressAlreadySet: false,
     currentVideoId: null,
     lastSaveTime: 0,
+    debugMode: false,
     dependenciesURLs: {
       fontAwesomeIcons:
         "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css",
@@ -42,6 +43,14 @@
 
   const CONFIG_KEY = "Youtube_SaveResume_Progress_Config";
   const moviePlayerSelector = "#movie_player";
+  const PlayerState = {
+    UNSTARTED: -1,
+    ENDED: 0,
+    PLAYING: 1,
+    PAUSED: 2,
+    BUFFERING: 3,
+    CUED: 5,
+  };
   const FontAwesomeIcons = {
     trash: ["fa-solid", "fa-trash-can"],
     xmark: ["fa-solid", "fa-xmark"],
@@ -297,7 +306,10 @@
     const previousInterval = configData.userSettings.savingInterval;
     Object.assign(configData.userSettings, merged);
 
-    if (newConfig.savingInterval && newConfig.savingInterval !== previousInterval) {
+    if (
+      newConfig.savingInterval &&
+      newConfig.savingInterval !== previousInterval
+    ) {
       startSavingTimer();
     }
   }
@@ -420,7 +432,24 @@
     const videoProgress = getVideoCurrentTime();
     const videoId = getVideoId();
 
-    const isBlacklisted = configData.userSettings.blacklistedVideos.includes(videoId);
+    // Don't overwrite the stored progress before it has been applied to the player.
+    // If savedProgressAlreadySet is still false it means seekTo() hasn't run yet,
+    // so saving now would overwrite the real saved position with currentTime ≈ 0.
+    if (!configData.savedProgressAlreadySet && getSavedVideoProgress()) {
+      const saved = getSavedVideoProgress();
+      ysrpLog(
+        "saveVideoProgress: seek not applied yet, skipping save —",
+        "savedTarget =", fancyTimeFormat(saved),
+        `(${saved}s)`,
+        "| currentTime =", getVideoCurrentTime().toFixed(2) + "s",
+        "| playerState =", playerStateName(getMoviePlayer()?.getPlayerState())
+      );
+      updateInfoText(`Restoring: ${fancyTimeFormat(saved)}...`);
+      return;
+    }
+
+    const isBlacklisted =
+      configData.userSettings.blacklistedVideos.includes(videoId);
     if (isBlacklisted) {
       updateInfoText("Saving: Disabled (Manual)");
       return;
@@ -455,7 +484,7 @@
   }
   function getSavedVideoList() {
     const savedVideoList = Object.entries(window.localStorage).filter(
-      ([key, value]) => key.includes("Youtube_SaveResume_Progress-")
+      ([key, value]) => key.includes("Youtube_SaveResume_Progress-"),
     );
     return savedVideoList;
   }
@@ -471,7 +500,7 @@
 
   function videoHasChapters() {
     const chaptersSection = document.querySelector(
-      '.ytp-chapter-container[style=""]'
+      '.ytp-chapter-container[style=""]',
     );
     const chaptersSectionDisplay = getComputedStyle(chaptersSection).display;
     return chaptersSectionDisplay !== "none";
@@ -479,8 +508,17 @@
 
   function setSavedProgress() {
     const savedProgress = getSavedVideoProgress();
+    const player = getMoviePlayer();
+    const stateBeforeSeek = player?.getPlayerState();
+    ysrpLog(
+      "setSavedProgress: seeking to", fancyTimeFormat(savedProgress),
+      `(${savedProgress}s)`,
+      "| player state before seek =", playerStateName(stateBeforeSeek)
+    );
     setVideoProgress(savedProgress);
     configData.savedProgressAlreadySet = true;
+    ysrpLog("setSavedProgress: seekTo called, savedProgressAlreadySet = true");
+    updateInfoText(`Last save: ${fancyTimeFormat(savedProgress)}`);
   }
 
   // code ref: https://stackoverflow.com/questions/5525071/how-to-wait-until-an-element-exists
@@ -510,6 +548,88 @@
     callback();
   }
 
+  const ysrpT0 = performance.now();
+  function ysrpLog(...args) {
+    if (!configData.debugMode) return;
+    const ms = (performance.now() - ysrpT0).toFixed(0);
+    console.log(`[YSRP +${ms}ms]`, ...args);
+  }
+  function playerStateName(s) {
+    const names = {
+      [-1]: "UNSTARTED",
+      [0]: "ENDED",
+      [1]: "PLAYING",
+      [2]: "PAUSED",
+      [3]: "BUFFERING",
+      [5]: "CUED",
+    };
+    return s === undefined ? "undefined" : `${names[s] ?? "UNKNOWN"}(${s})`;
+  }
+
+  async function waitForVideoReady() {
+    ysrpLog("waitForVideoReady: waiting for player element...");
+    const player = await waitForElm(moviePlayerSelector);
+    const playerState = player.getPlayerState();
+    const duration = player.getDuration();
+    ysrpLog(
+      "waitForVideoReady: player found —",
+      "state =", playerStateName(playerState),
+      "| duration =", duration.toFixed(2) + "s"
+    );
+
+    // duration > 0 means the video metadata is loaded and seekTo will work,
+    // even if state is still UNSTARTED (e.g. autoplay blocked, browser restart).
+    // As a secondary check, accept any explicit "ready" state from the API.
+    const readyReason = (d, s) => {
+      if (d > 0)                       return `duration > 0 (${d.toFixed(2)}s)`;
+      if (s === PlayerState.CUED)      return "state = CUED";
+      if (s === PlayerState.PLAYING)   return "state = PLAYING";
+      if (s === PlayerState.PAUSED)    return "state = PAUSED";
+      if (s === PlayerState.BUFFERING) return "state = BUFFERING";
+      return null;
+    };
+
+    const initialReason = readyReason(duration, playerState);
+    if (initialReason) {
+      ysrpLog("waitForVideoReady: already ready —", initialReason);
+      return;
+    }
+
+    // player.addEventListener("onStateChange") does not work in userscript sandboxes
+    // because the player's event system runs in the page context. Poll instead.
+    ysrpLog("waitForVideoReady: not ready yet (state =", playerStateName(playerState), ", duration = 0), polling every 200ms...");
+    return new Promise((resolve) => {
+      const interval = setInterval(() => {
+        const s = player.getPlayerState();
+        const d = player.getDuration();
+        ysrpLog(
+          "waitForVideoReady: poll —",
+          "state =", playerStateName(s),
+          "| duration =", d.toFixed(2) + "s"
+        );
+        const reason = readyReason(d, s);
+        if (reason) {
+          clearInterval(interval);
+          ysrpLog("waitForVideoReady: ready —", reason);
+          resolve();
+        }
+      }, 200);
+
+      // Fallback: give up after 10 s and try seekTo anyway.
+      setTimeout(() => {
+        clearInterval(interval);
+        const s = player.getPlayerState();
+        const d = player.getDuration();
+        ysrpLog(
+          "waitForVideoReady: 10s timeout hit, forcing seek anyway —",
+          "state =", playerStateName(s),
+          "| duration =", d.toFixed(2) + "s"
+        );
+        resolve();
+      }, 10000);
+    });
+  }
+
   function isReadyToSetSavedProgress() {
     return (
       !configData.savedProgressAlreadySet &&
@@ -521,13 +641,13 @@
     const leftControls = document.querySelector(".ytp-left-controls");
     leftControls.appendChild(element);
     const chaptersContainerElelement = document.querySelector(
-      ".ytp-chapter-container"
+      ".ytp-chapter-container",
     );
     chaptersContainerElelement.style.flexBasis = "auto";
   }
   function insertInfoElementInChaptersContainer(element) {
     const chaptersContainer = document.querySelector(
-      '.ytp-chapter-container[style=""]'
+      '.ytp-chapter-container[style=""]',
     );
     chaptersContainer.style.display = "flex";
     chaptersContainer.appendChild(element);
@@ -562,11 +682,11 @@
         state.floatingUi.cleanUpFn = autoUpdate(
           dashboardButton,
           dashboardContainer,
-          updateFloatingDashboardUi
+          updateFloatingDashboardUi,
         );
         document.addEventListener(
           "click",
-          closeFloatingDashboardUiOnClickOutside
+          closeFloatingDashboardUiOnClickOutside,
         );
       }
     });
@@ -583,7 +703,7 @@
       closeFloatingDashboardUi();
       document.removeEventListener(
         "click",
-        closeFloatingDashboardUiOnClickOutside
+        closeFloatingDashboardUiOnClickOutside,
       );
     }
   }
@@ -631,9 +751,10 @@
 
       const updateProgress = () => {
         const videoId = getVideoId();
-        const isBlacklisted = configData.userSettings.blacklistedVideos.includes(videoId);
+        const isBlacklisted =
+          configData.userSettings.blacklistedVideos.includes(videoId);
         const duration = getVideoDuration();
-        
+
         if (isBlacklisted) {
           progressDisplay.textContent = `- / ${fancyTimeFormat(duration)}`;
           return;
@@ -641,7 +762,7 @@
 
         const currentTime = getVideoCurrentTime();
         progressDisplay.textContent = `${fancyTimeFormat(
-          currentTime
+          currentTime,
         )} / ${fancyTimeFormat(duration)}`;
       };
 
@@ -657,8 +778,9 @@
 
       const updateToggleButton = () => {
         const videoId = getVideoId();
-        const isBlacklisted = configData.userSettings.blacklistedVideos.includes(videoId);
-        
+        const isBlacklisted =
+          configData.userSettings.blacklistedVideos.includes(videoId);
+
         if (isBlacklisted) {
           toggleButton.textContent = "Enable auto-save";
           toggleButton.classList.remove("enabled");
@@ -673,13 +795,13 @@
       toggleButton.addEventListener("click", () => {
         const videoId = getVideoId();
         let blacklisted = [...configData.userSettings.blacklistedVideos];
-        
+
         if (blacklisted.includes(videoId)) {
-          blacklisted = blacklisted.filter(id => id !== videoId);
+          blacklisted = blacklisted.filter((id) => id !== videoId);
         } else {
           blacklisted.push(videoId);
         }
-        
+
         setUserConfig({ blacklistedVideos: blacklisted });
         updateToggleButton();
       });
@@ -692,7 +814,7 @@
 
     function renderSavedVideosView(onTitleUpdate) {
       const videos = getSavedVideoList();
-      
+
       // Sort videos by most recent save date
       const sortedVideos = videos
         .map(([key, value]) => ({ key, data: JSON.parse(value) }))
@@ -711,7 +833,7 @@
       sortedVideos.forEach(({ key, data }) => {
         const { videoName, videoProgress, saveDate } = data;
         const videoId = key.replace("Youtube_SaveResume_Progress-", "");
-        
+
         const videoEl = document.createElement("li");
         videoEl.classList.add("ysrp-video-item");
 
@@ -733,7 +855,7 @@
 
         const dateSpan = document.createElement("span");
         const dateObj = new Date(saveDate);
-        dateSpan.textContent = `Saved: ${dateObj.toLocaleDateString()} ${dateObj.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+        dateSpan.textContent = `Saved: ${dateObj.toLocaleDateString()} ${dateObj.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })}`;
 
         metaContainer.append(progressSpan, dateSpan);
         infoContainer.append(videoLink, metaContainer);
@@ -905,7 +1027,8 @@
       });
 
       const visibilityInfo = document.createElement("p");
-      visibilityInfo.textContent = "You can always show it again from the Userscript manager menu (e.g. Tampermonkey icon).";
+      visibilityInfo.textContent =
+        "You can always show it again from the Userscript manager menu (e.g. Tampermonkey icon).";
       visibilityInfo.style.fontSize = "11px";
       visibilityInfo.style.color = "#888";
       visibilityInfo.style.margin = "0";
@@ -946,7 +1069,7 @@
         },
         savedVideos: () =>
           viewBody.appendChild(
-            renderSavedVideosView((newTitle) => (title.textContent = newTitle))
+            renderSavedVideosView((newTitle) => (title.textContent = newTitle)),
           ),
         configuration: () => {
           title.textContent = "Configuration";
@@ -1014,7 +1137,9 @@
     renderContent("currentVideo");
   }
   function applyUiVisibility() {
-    const infoElContainers = document.querySelectorAll(".last-save-info-container");
+    const infoElContainers = document.querySelectorAll(
+      ".last-save-info-container",
+    );
     infoElContainers.forEach((container) => {
       if (configData.userSettings.uiVisible) {
         container.classList.remove("ysrp-hidden");
@@ -1033,7 +1158,10 @@
 
   function registerMenuCommands() {
     if (typeof GM_registerMenuCommand !== "undefined") {
-      if (menuCommandId !== null && typeof GM_unregisterMenuCommand !== "undefined") {
+      if (
+        menuCommandId !== null &&
+        typeof GM_unregisterMenuCommand !== "undefined"
+      ) {
         GM_unregisterMenuCommand(menuCommandId);
       }
 
@@ -1045,7 +1173,6 @@
       });
     }
   }
-
 
   function createInfoUI() {
     const infoElContainer = document.createElement("div");
@@ -1089,7 +1216,7 @@
       icon.classList.add("fa-gear");
     });
   }
-  
+
   function addInterFont() {
     const head = document.getElementsByTagName("HEAD")[0];
     const fontLink = document.createElement("link");
@@ -1137,8 +1264,9 @@
       configData.sanitizer = sanitizer;
     }
 
-    onPlayerElementExist(() => {
+    onPlayerElementExist(async () => {
       initializeUI();
+      await waitForVideoReady();
       if (isReadyToSetSavedProgress()) {
         setSavedProgress();
       }
