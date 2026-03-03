@@ -2,7 +2,7 @@
 // @license MIT
 // @name         Youtube Save/Resume Progress
 // @namespace    http://tampermonkey.net/
-// @version      1.9.1
+// @version      1.9.2
 // @description  Have you ever closed a YouTube video by accident, or have you gone to another one and when you come back the video starts from 0? With this extension it won't happen anymore
 // @author       Costin Alexandru Sandu
 // @match        https://www.youtube.com/watch*
@@ -439,10 +439,13 @@
       const saved = getSavedVideoProgress();
       ysrpLog(
         "saveVideoProgress: seek not applied yet, skipping save —",
-        "savedTarget =", fancyTimeFormat(saved),
+        "savedTarget =",
+        fancyTimeFormat(saved),
         `(${saved}s)`,
-        "| currentTime =", getVideoCurrentTime().toFixed(2) + "s",
-        "| playerState =", playerStateName(getMoviePlayer()?.getPlayerState())
+        "| currentTime =",
+        getVideoCurrentTime().toFixed(2) + "s",
+        "| playerState =",
+        playerStateName(getMoviePlayer()?.getPlayerState()),
       );
       updateInfoText(`Restoring: ${fancyTimeFormat(saved)}...`);
       return;
@@ -511,9 +514,11 @@
     const player = getMoviePlayer();
     const stateBeforeSeek = player?.getPlayerState();
     ysrpLog(
-      "setSavedProgress: seeking to", fancyTimeFormat(savedProgress),
+      "setSavedProgress: seeking to",
+      fancyTimeFormat(savedProgress),
       `(${savedProgress}s)`,
-      "| player state before seek =", playerStateName(stateBeforeSeek)
+      "| player state before seek =",
+      playerStateName(stateBeforeSeek),
     );
     setVideoProgress(savedProgress);
     configData.savedProgressAlreadySet = true;
@@ -573,18 +578,20 @@
     const duration = player.getDuration();
     ysrpLog(
       "waitForVideoReady: player found —",
-      "state =", playerStateName(playerState),
-      "| duration =", duration.toFixed(2) + "s"
+      "state =",
+      playerStateName(playerState),
+      "| duration =",
+      duration.toFixed(2) + "s",
     );
 
     // duration > 0 means the video metadata is loaded and seekTo will work,
     // even if state is still UNSTARTED (e.g. autoplay blocked, browser restart).
     // As a secondary check, accept any explicit "ready" state from the API.
     const readyReason = (d, s) => {
-      if (d > 0)                       return `duration > 0 (${d.toFixed(2)}s)`;
-      if (s === PlayerState.CUED)      return "state = CUED";
-      if (s === PlayerState.PLAYING)   return "state = PLAYING";
-      if (s === PlayerState.PAUSED)    return "state = PAUSED";
+      if (d > 0) return `duration > 0 (${d.toFixed(2)}s)`;
+      if (s === PlayerState.CUED) return "state = CUED";
+      if (s === PlayerState.PLAYING) return "state = PLAYING";
+      if (s === PlayerState.PAUSED) return "state = PAUSED";
       if (s === PlayerState.BUFFERING) return "state = BUFFERING";
       return null;
     };
@@ -597,15 +604,21 @@
 
     // player.addEventListener("onStateChange") does not work in userscript sandboxes
     // because the player's event system runs in the page context. Poll instead.
-    ysrpLog("waitForVideoReady: not ready yet (state =", playerStateName(playerState), ", duration = 0), polling every 200ms...");
+    ysrpLog(
+      "waitForVideoReady: not ready yet (state =",
+      playerStateName(playerState),
+      ", duration = 0), polling every 200ms...",
+    );
     return new Promise((resolve) => {
       const interval = setInterval(() => {
         const s = player.getPlayerState();
         const d = player.getDuration();
         ysrpLog(
           "waitForVideoReady: poll —",
-          "state =", playerStateName(s),
-          "| duration =", d.toFixed(2) + "s"
+          "state =",
+          playerStateName(s),
+          "| duration =",
+          d.toFixed(2) + "s",
         );
         const reason = readyReason(d, s);
         if (reason) {
@@ -622,8 +635,10 @@
         const d = player.getDuration();
         ysrpLog(
           "waitForVideoReady: 10s timeout hit, forcing seek anyway —",
-          "state =", playerStateName(s),
-          "| duration =", d.toFixed(2) + "s"
+          "state =",
+          playerStateName(s),
+          "| duration =",
+          d.toFixed(2) + "s",
         );
         resolve();
       }, 10000);
@@ -636,6 +651,28 @@
       playerExists() &&
       getSavedVideoProgress()
     );
+  }
+
+  function setupSeekListener() {
+    const videoEl = document.querySelector(`${moviePlayerSelector} video`);
+    if (!videoEl) {
+      ysrpLog("setupSeekListener: no <video> element found, skipping");
+      return;
+    }
+    videoEl.addEventListener("seeked", () => {
+      if (!configData.savedProgressAlreadySet) {
+        ysrpLog(
+          "setupSeekListener: seeked fired but savedProgressAlreadySet is false, skipping",
+        );
+        return;
+      }
+      ysrpLog(
+        "setupSeekListener: seeked — saving progress at",
+        fancyTimeFormat(getVideoCurrentTime()),
+      );
+      saveVideoProgress();
+    });
+    ysrpLog("setupSeekListener: listener attached to <video>");
   }
   function insertInfoElement(element) {
     const leftControls = document.querySelector(".ytp-left-controls");
@@ -1267,8 +1304,17 @@
     onPlayerElementExist(async () => {
       initializeUI();
       await waitForVideoReady();
+      setupSeekListener();
       if (isReadyToSetSavedProgress()) {
         setSavedProgress();
+      } else {
+        // No saved progress to restore (or it was already applied).
+        // Mark the flag so the saving timer can operate normally and
+        // doesn't get stuck in the "Restoring" guard forever.
+        configData.savedProgressAlreadySet = true;
+        ysrpLog(
+          "initialize: no saved progress to restore, savedProgressAlreadySet = true",
+        );
       }
     });
 
