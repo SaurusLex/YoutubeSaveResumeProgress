@@ -2,7 +2,7 @@
 // @license MIT
 // @name         Youtube Save/Resume Progress
 // @namespace    http://tampermonkey.net/
-// @version      1.9.2
+// @version      1.9.3
 // @description  Have you ever closed a YouTube video by accident, or have you gone to another one and when you come back the video starts from 0? With this extension it won't happen anymore
 // @author       Costin Alexandru Sandu
 // @match        https://www.youtube.com/watch*
@@ -11,6 +11,7 @@
 // @grant        GM_unregisterMenuCommand
 // @require      https://cdn.jsdelivr.net/npm/@floating-ui/core@1.6.0/dist/floating-ui.core.umd.min.js
 // @require      https://cdn.jsdelivr.net/npm/@floating-ui/dom@1.6.3/dist/floating-ui.dom.umd.min.js
+// @require      https://cdn.jsdelivr.net/npm/lucide@0.542.0/dist/umd/lucide.min.js
 // @downloadURL https://update.greasyfork.org/scripts/487305/Youtube%20SaveResume%20Progress.user.js
 // @updateURL https://update.greasyfork.org/scripts/487305/Youtube%20SaveResume%20Progress.meta.js
 // ==/UserScript==
@@ -24,8 +25,6 @@
     lastSaveTime: 0,
     debugMode: false,
     dependenciesURLs: {
-      fontAwesomeIcons:
-        "https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.1/css/all.min.css",
       interFont:
         "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap",
     },
@@ -51,12 +50,12 @@
     BUFFERING: 3,
     CUED: 5,
   };
-  const FontAwesomeIcons = {
-    trash: ["fa-solid", "fa-trash-can"],
-    xmark: ["fa-solid", "fa-xmark"],
-    video: ["fa-solid", "fa-clapperboard"],
-    gear: ["fa-solid", "fa-gear"],
-    currentVideo: ["fa-solid", "fa-circle-play"],
+  const LucideIcons = {
+    trash: "trash-2",
+    xmark: "x",
+    video: "clapperboard",
+    gear: "settings",
+    currentVideo: "circle-play",
   };
 
   const CSS_STYLES = `
@@ -70,17 +69,46 @@
     }
     .last-save-info {
       text-shadow: none;
-      background: white;
-      color: black;
-      padding: .5rem;
-      border-radius: .5rem;
+      background: rgba(255, 255, 255, 0.15);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      color: white;
+      display: flex;
+      align-items: center;
+      gap: 0.9rem;
+      padding: 1rem;
+      box-sizing: border-box;
+      border-radius: 2rem;
+      border: 1px solid rgba(255, 255, 255, 0.25);
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
+      letter-spacing: 0.01em;
+    }
+    .last-save-info-text {
+      white-space: nowrap;
+    }
+    .lucide {
+      width: 16px;
+      height: 16px;
+      stroke: currentColor;
+      fill: none;
+      flex-shrink: 0;
     }
     .ysrp-dashboard-button {
-      background: white;
-      border: rgba(0, 0, 0, 0.3) 1px solid;
-      border-radius: .5rem;
-      margin-left: 1rem;
+      background: transparent;
+      border: none;
+      margin-left: 0;
+      width: 1.25rem;
+      aspect-ratio: 1;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      padding: 0;
       cursor: pointer;
+    }
+    .ysrp-dashboard-button .lucide {
+      color: rgba(255, 255, 255, 0.85);
+      width: 1.7rem;
+      height: 1.7rem;
     }
     .dashboard-container {
       all: initial;
@@ -341,14 +369,29 @@
   }
 
   function createIcon(iconName, color) {
-    const icon = document.createElement("i");
-    const cssClasses = FontAwesomeIcons[iconName];
-    icon.classList.add(...cssClasses);
+    const icon = document.createElement("span");
+    icon.setAttribute("data-lucide", LucideIcons[iconName]);
+    icon.setAttribute("aria-hidden", "true");
     icon.style.color = color;
-    icon.style.fontSize = "16px";
+    icon.style.display = "inline-flex";
 
     return icon;
   }
+
+  function renderLucideIcons() {
+    if (!window.lucide || typeof window.lucide.createIcons !== "function") {
+      return;
+    }
+
+    window.lucide.createIcons({
+      icons: window.lucide.icons,
+      nameAttr: "data-lucide",
+      attrs: {
+        "stroke-width": 2,
+      },
+    });
+  }
+
   // ref: https://stackoverflow.com/questions/3733227/javascript-seconds-to-minutes-and-seconds
   function fancyTimeFormat(duration) {
     // Hours, minutes and seconds
@@ -715,6 +758,7 @@
         closeFloatingDashboardUi();
       } else {
         document.body.appendChild(dashboardContainer);
+        renderLucideIcons();
         updateFloatingDashboardUi();
         state.floatingUi.cleanUpFn = autoUpdate(
           dashboardButton,
@@ -1115,6 +1159,7 @@
       };
 
       views[viewId]?.();
+      renderLucideIcons();
     }
 
     // Header structure
@@ -1172,6 +1217,7 @@
     });
 
     renderContent("currentVideo");
+    renderLucideIcons();
   }
   function applyUiVisibility() {
     const infoElContainers = document.querySelectorAll(
@@ -1222,6 +1268,7 @@
     infoElText.classList.add("last-save-info-text");
     infoElText.textContent = "Last save: Loading...";
     dashboardButton.classList.add("ysrp-dashboard-button");
+    dashboardButton.appendChild(createIcon("gear", "white"));
 
     infoEl.append(infoElText, dashboardButton);
     infoElContainer.appendChild(infoEl);
@@ -1232,26 +1279,6 @@
   async function onChaptersReadyToMount(callback) {
     await waitForElm('.ytp-chapter-container[style=""]');
     callback();
-  }
-
-  function addFontawesomeIcons() {
-    const head = document.getElementsByTagName("HEAD")[0];
-    const iconsUi = document.createElement("link");
-    Object.assign(iconsUi, {
-      rel: "stylesheet",
-      type: "text/css",
-      href: configData.dependenciesURLs.fontAwesomeIcons,
-    });
-
-    head.appendChild(iconsUi);
-    iconsUi.addEventListener("load", () => {
-      const icon = document.createElement("span");
-
-      const dashboardButton = document.querySelector(".ysrp-dashboard-button");
-      dashboardButton.appendChild(icon);
-      icon.classList.add("fa-solid");
-      icon.classList.add("fa-gear");
-    });
   }
 
   function addInterFont() {
@@ -1266,8 +1293,8 @@
 
   function initializeDependencies() {
     injectStyles();
-    addFontawesomeIcons();
     addInterFont();
+    renderLucideIcons();
     setFloatingDashboardUi();
   }
 
