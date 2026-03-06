@@ -2,7 +2,7 @@
 // @license MIT
 // @name         Youtube Save/Resume Progress
 // @namespace    http://tampermonkey.net/
-// @version      1.9.3
+// @version      1.9.4
 // @description  Have you ever closed a YouTube video by accident, or have you gone to another one and when you come back the video starts from 0? With this extension it won't happen anymore
 // @author       Costin Alexandru Sandu
 // @match        https://www.youtube.com/watch*
@@ -18,17 +18,40 @@
 
 (function () {
   "strict";
-  var configData = {
-    sanitizer: null,
-    savedProgressAlreadySet: false,
-    currentVideoId: null,
-    lastSaveTime: 0,
-    debugMode: false,
-    dependenciesURLs: {
-      interFont:
+
+  // ── Immutable constants ──────────────────────────────────────────────
+  const CONSTANTS = {
+    STORAGE: {
+      CONFIG_KEY: "Youtube_SaveResume_Progress_Config",
+      ITEM_PREFIX: "Youtube_SaveResume_Progress-",
+    },
+    SELECTORS: {
+      MOVIE_PLAYER: "#movie_player",
+      VIDEO_ELEMENT: "#movie_player video",
+      CHAPTER_CONTAINER: '.ytp-chapter-container[style=""]',
+    },
+    ENUMS: {
+      PlayerState: {
+        UNSTARTED: -1,
+        ENDED: 0,
+        PLAYING: 1,
+        PAUSED: 2,
+        BUFFERING: 3,
+        CUED: 5,
+      },
+      LucideIcons: {
+        trash: "trash-2",
+        xmark: "x",
+        video: "clapperboard",
+        gear: "settings",
+        currentVideo: "circle-play",
+      },
+    },
+    URLS: {
+      INTER_FONT:
         "https://fonts.googleapis.com/css2?family=Inter:wght@400;500;700&display=swap",
     },
-    userSettings: {
+    DEFAULT_SETTINGS: {
       minDuration: 0,
       enableMinDuration: false,
       blacklistedVideos: [],
@@ -37,31 +60,26 @@
     },
   };
 
-  var saveTimerId = null;
-  var menuCommandId = null;
-
-  const CONFIG_KEY = "Youtube_SaveResume_Progress_Config";
-  const moviePlayerSelector = "#movie_player";
-  const PlayerState = {
-    UNSTARTED: -1,
-    ENDED: 0,
-    PLAYING: 1,
-    PAUSED: 2,
-    BUFFERING: 3,
-    CUED: 5,
-  };
-  const LucideIcons = {
-    trash: "trash-2",
-    xmark: "x",
-    video: "clapperboard",
-    gear: "settings",
-    currentVideo: "circle-play",
+  // ── Mutable application state ────────────────────────────────────────
+  const APP_STATE = {
+    sanitizer: null,
+    debugMode: false,
+    savedProgressAlreadySet: false,
+    currentVideoId: null,
+    lastSaveTime: 0,
+    userSettings: { ...CONSTANTS.DEFAULT_SETTINGS },
+    floatingUi: { cleanUpFn: null, dashboardContainer: null },
+    moviePlayer: null,
+    timers: { save: null },
+    ui: { menuCommandId: null },
+    performanceT0: performance.now(),
   };
 
   const CSS_STYLES = `
     .last-save-info-container {
       all: initial;
       font-family: 'Inter', sans-serif;
+      font-variant-numeric: tabular-nums;
       font-size: 1.3rem;
       margin-left: 0.5rem;
       display: flex;
@@ -69,17 +87,16 @@
     }
     .last-save-info {
       text-shadow: none;
-      background: rgba(255, 255, 255, 0.15);
-      backdrop-filter: blur(8px);
-      -webkit-backdrop-filter: blur(8px);
+      background: rgba(0, 0, 0, 0.3);
       color: white;
       display: flex;
       align-items: center;
       gap: 0.9rem;
-      padding: 1rem;
+      height: 40px;
+      padding: 0 1rem;
       box-sizing: border-box;
       border-radius: 2rem;
-      border: 1px solid rgba(255, 255, 255, 0.25);
+      border: 1px solid rgba(255, 255, 255, 0.2);
       box-shadow: 0 2px 8px rgba(0, 0, 0, 0.2);
       letter-spacing: 0.01em;
     }
@@ -320,7 +337,9 @@
 
   function getUserConfig() {
     try {
-      const saved = JSON.parse(window.localStorage.getItem(CONFIG_KEY));
+      const saved = JSON.parse(
+        window.localStorage.getItem(CONSTANTS.STORAGE.CONFIG_KEY),
+      );
       return saved || {};
     } catch {
       return {};
@@ -330,9 +349,12 @@
   function setUserConfig(newConfig) {
     const current = getUserConfig();
     const merged = { ...current, ...newConfig };
-    window.localStorage.setItem(CONFIG_KEY, JSON.stringify(merged));
-    const previousInterval = configData.userSettings.savingInterval;
-    Object.assign(configData.userSettings, merged);
+    window.localStorage.setItem(
+      CONSTANTS.STORAGE.CONFIG_KEY,
+      JSON.stringify(merged),
+    );
+    const previousInterval = APP_STATE.userSettings.savingInterval;
+    Object.assign(APP_STATE.userSettings, merged);
 
     if (
       newConfig.savingInterval &&
@@ -343,34 +365,28 @@
   }
 
   // Load initial settings
-  Object.assign(configData.userSettings, getUserConfig());
-
-  var state = {
-    floatingUi: {
-      cleanUpFn: null,
-      dashboardContainer: null,
-    },
-    moviePlayer: null,
-  };
+  Object.assign(APP_STATE.userSettings, getUserConfig());
 
   function getMoviePlayer() {
-    if (!state.moviePlayer || !document.contains(state.moviePlayer)) {
-      state.moviePlayer = document.querySelector(moviePlayerSelector);
+    if (!APP_STATE.moviePlayer || !document.contains(APP_STATE.moviePlayer)) {
+      APP_STATE.moviePlayer = document.querySelector(
+        CONSTANTS.SELECTORS.MOVIE_PLAYER,
+      );
     }
-    return state.moviePlayer;
+    return APP_STATE.moviePlayer;
   }
 
   function startSavingTimer() {
-    if (saveTimerId) {
-      clearInterval(saveTimerId);
+    if (APP_STATE.timers.save) {
+      clearInterval(APP_STATE.timers.save);
     }
-    const intervalMs = configData.userSettings.savingInterval * 1000;
-    saveTimerId = setInterval(saveVideoProgress, intervalMs);
+    const intervalMs = APP_STATE.userSettings.savingInterval * 1000;
+    APP_STATE.timers.save = setInterval(saveVideoProgress, intervalMs);
   }
 
   function createIcon(iconName, color) {
     const icon = document.createElement("span");
-    icon.setAttribute("data-lucide", LucideIcons[iconName]);
+    icon.setAttribute("data-lucide", CONSTANTS.ENUMS.LucideIcons[iconName]);
     icon.setAttribute("aria-hidden", "true");
     icon.style.color = color;
     icon.style.display = "inline-flex";
@@ -433,8 +449,8 @@
   }
 
   function getVideoId() {
-    if (configData.currentVideoId) {
-      return configData.currentVideoId;
+    if (APP_STATE.currentVideoId) {
+      return APP_STATE.currentVideoId;
     }
     const player = getMoviePlayer();
     const videoData = player ? player.getVideoData() : null;
@@ -462,8 +478,8 @@
     const lastSaveEl = document.querySelector(".last-save-info-text");
 
     // This is for browsers that support Trusted Types
-    const innerHtml = configData.sanitizer
-      ? configData.sanitizer.createHTML(text)
+    const innerHtml = APP_STATE.sanitizer
+      ? APP_STATE.sanitizer.createHTML(text)
       : text;
 
     if (lastSaveEl) {
@@ -478,7 +494,7 @@
     // Don't overwrite the stored progress before it has been applied to the player.
     // If savedProgressAlreadySet is still false it means seekTo() hasn't run yet,
     // so saving now would overwrite the real saved position with currentTime ≈ 0.
-    if (!configData.savedProgressAlreadySet && getSavedVideoProgress()) {
+    if (!APP_STATE.savedProgressAlreadySet && getSavedVideoProgress()) {
       const saved = getSavedVideoProgress();
       ysrpLog(
         "saveVideoProgress: seek not applied yet, skipping save —",
@@ -495,7 +511,7 @@
     }
 
     const isBlacklisted =
-      configData.userSettings.blacklistedVideos.includes(videoId);
+      APP_STATE.userSettings.blacklistedVideos.includes(videoId);
     if (isBlacklisted) {
       updateInfoText("Saving: Disabled (Manual)");
       return;
@@ -503,11 +519,11 @@
 
     // Check configuration constraints
     if (
-      configData.userSettings.enableMinDuration &&
-      configData.userSettings.minDuration > 0
+      APP_STATE.userSettings.enableMinDuration &&
+      APP_STATE.userSettings.minDuration > 0
     ) {
       const duration = getVideoDuration();
-      const minDurationSec = configData.userSettings.minDuration * 60;
+      const minDurationSec = APP_STATE.userSettings.minDuration * 60;
 
       if (duration < minDurationSec) {
         updateInfoText("Not saving (Too short)");
@@ -517,9 +533,9 @@
 
     updateInfoText(`Last save: ${fancyTimeFormat(videoProgress)}`);
 
-    configData.currentVideoId = videoId;
-    configData.lastSaveTime = Date.now();
-    const idToStore = "Youtube_SaveResume_Progress-" + videoId;
+    APP_STATE.currentVideoId = videoId;
+    APP_STATE.lastSaveTime = Date.now();
+    const idToStore = CONSTANTS.STORAGE.ITEM_PREFIX + videoId;
     const progressData = {
       videoProgress,
       saveDate: Date.now(),
@@ -530,14 +546,14 @@
   }
   function getSavedVideoList() {
     const savedVideoList = Object.entries(window.localStorage).filter(
-      ([key, value]) => key.includes("Youtube_SaveResume_Progress-"),
+      ([key, value]) => key.includes(CONSTANTS.STORAGE.ITEM_PREFIX),
     );
     return savedVideoList;
   }
 
   function getSavedVideoProgress() {
     const videoId = getVideoId();
-    const idToStore = "Youtube_SaveResume_Progress-" + videoId;
+    const idToStore = CONSTANTS.STORAGE.ITEM_PREFIX + videoId;
     const savedVideoData = window.localStorage.getItem(idToStore);
     const { videoProgress } = JSON.parse(savedVideoData) || {};
 
@@ -546,7 +562,7 @@
 
   function videoHasChapters() {
     const chaptersSection = document.querySelector(
-      '.ytp-chapter-container[style=""]',
+      CONSTANTS.SELECTORS.CHAPTER_CONTAINER,
     );
     const chaptersSectionDisplay = getComputedStyle(chaptersSection).display;
     return chaptersSectionDisplay !== "none";
@@ -564,7 +580,7 @@
       playerStateName(stateBeforeSeek),
     );
     setVideoProgress(savedProgress);
-    configData.savedProgressAlreadySet = true;
+    APP_STATE.savedProgressAlreadySet = true;
     ysrpLog("setSavedProgress: seekTo called, savedProgressAlreadySet = true");
     updateInfoText(`Last save: ${fancyTimeFormat(savedProgress)}`);
   }
@@ -592,14 +608,13 @@
   }
 
   async function onPlayerElementExist(callback) {
-    await waitForElm("#movie_player");
+    await waitForElm(CONSTANTS.SELECTORS.MOVIE_PLAYER);
     callback();
   }
 
-  const ysrpT0 = performance.now();
   function ysrpLog(...args) {
-    if (!configData.debugMode) return;
-    const ms = (performance.now() - ysrpT0).toFixed(0);
+    if (!APP_STATE.debugMode) return;
+    const ms = (performance.now() - APP_STATE.performanceT0).toFixed(0);
     console.log(`[YSRP +${ms}ms]`, ...args);
   }
   function playerStateName(s) {
@@ -616,7 +631,7 @@
 
   async function waitForVideoReady() {
     ysrpLog("waitForVideoReady: waiting for player element...");
-    const player = await waitForElm(moviePlayerSelector);
+    const player = await waitForElm(CONSTANTS.SELECTORS.MOVIE_PLAYER);
     const playerState = player.getPlayerState();
     const duration = player.getDuration();
     ysrpLog(
@@ -632,10 +647,11 @@
     // As a secondary check, accept any explicit "ready" state from the API.
     const readyReason = (d, s) => {
       if (d > 0) return `duration > 0 (${d.toFixed(2)}s)`;
-      if (s === PlayerState.CUED) return "state = CUED";
-      if (s === PlayerState.PLAYING) return "state = PLAYING";
-      if (s === PlayerState.PAUSED) return "state = PAUSED";
-      if (s === PlayerState.BUFFERING) return "state = BUFFERING";
+      if (s === CONSTANTS.ENUMS.PlayerState.CUED) return "state = CUED";
+      if (s === CONSTANTS.ENUMS.PlayerState.PLAYING) return "state = PLAYING";
+      if (s === CONSTANTS.ENUMS.PlayerState.PAUSED) return "state = PAUSED";
+      if (s === CONSTANTS.ENUMS.PlayerState.BUFFERING)
+        return "state = BUFFERING";
       return null;
     };
 
@@ -690,20 +706,20 @@
 
   function isReadyToSetSavedProgress() {
     return (
-      !configData.savedProgressAlreadySet &&
+      !APP_STATE.savedProgressAlreadySet &&
       playerExists() &&
       getSavedVideoProgress()
     );
   }
 
   function setupSeekListener() {
-    const videoEl = document.querySelector(`${moviePlayerSelector} video`);
+    const videoEl = document.querySelector(CONSTANTS.SELECTORS.VIDEO_ELEMENT);
     if (!videoEl) {
       ysrpLog("setupSeekListener: no <video> element found, skipping");
       return;
     }
     videoEl.addEventListener("seeked", () => {
-      if (!configData.savedProgressAlreadySet) {
+      if (!APP_STATE.savedProgressAlreadySet) {
         ysrpLog(
           "setupSeekListener: seeked fired but savedProgressAlreadySet is false, skipping",
         );
@@ -727,7 +743,7 @@
   }
   function insertInfoElementInChaptersContainer(element) {
     const chaptersContainer = document.querySelector(
-      '.ytp-chapter-container[style=""]',
+      CONSTANTS.SELECTORS.CHAPTER_CONTAINER,
     );
     chaptersContainer.style.display = "flex";
     chaptersContainer.appendChild(element);
@@ -749,7 +765,7 @@
 
   function setFloatingDashboardUi() {
     const dashboardButton = document.querySelector(".ysrp-dashboard-button");
-    const dashboardContainer = state.floatingUi.dashboardContainer;
+    const dashboardContainer = APP_STATE.floatingUi.dashboardContainer;
     const { autoUpdate } = window.FloatingUIDOM;
 
     dashboardButton.addEventListener("click", () => {
@@ -760,7 +776,7 @@
         document.body.appendChild(dashboardContainer);
         renderLucideIcons();
         updateFloatingDashboardUi();
-        state.floatingUi.cleanUpFn = autoUpdate(
+        APP_STATE.floatingUi.cleanUpFn = autoUpdate(
           dashboardButton,
           dashboardContainer,
           updateFloatingDashboardUi,
@@ -775,7 +791,7 @@
 
   function closeFloatingDashboardUiOnClickOutside(event) {
     const dashboardButton = document.querySelector(".ysrp-dashboard-button");
-    const dashboardContainer = state.floatingUi.dashboardContainer;
+    const dashboardContainer = APP_STATE.floatingUi.dashboardContainer;
     if (
       dashboardContainer &&
       !dashboardContainer.contains(event.target) &&
@@ -790,10 +806,10 @@
   }
 
   function closeFloatingDashboardUi() {
-    const dashboardContainer = state.floatingUi.dashboardContainer;
+    const dashboardContainer = APP_STATE.floatingUi.dashboardContainer;
     dashboardContainer.remove();
-    state.floatingUi.cleanUpFn();
-    state.floatingUi.cleanUpFn = null;
+    APP_STATE.floatingUi.cleanUpFn();
+    APP_STATE.floatingUi.cleanUpFn = null;
   }
 
   function createDashboard() {
@@ -803,7 +819,7 @@
     dashboardContainer.addEventListener("click", (event) => {
       event.stopPropagation();
     });
-    state.floatingUi.dashboardContainer = dashboardContainer;
+    APP_STATE.floatingUi.dashboardContainer = dashboardContainer;
     dashboardContainer.classList.add("dashboard-container");
 
     dashboardContainer.classList.add("dashboard-container");
@@ -833,7 +849,7 @@
       const updateProgress = () => {
         const videoId = getVideoId();
         const isBlacklisted =
-          configData.userSettings.blacklistedVideos.includes(videoId);
+          APP_STATE.userSettings.blacklistedVideos.includes(videoId);
         const duration = getVideoDuration();
 
         if (isBlacklisted) {
@@ -860,7 +876,7 @@
       const updateToggleButton = () => {
         const videoId = getVideoId();
         const isBlacklisted =
-          configData.userSettings.blacklistedVideos.includes(videoId);
+          APP_STATE.userSettings.blacklistedVideos.includes(videoId);
 
         if (isBlacklisted) {
           toggleButton.textContent = "Enable auto-save";
@@ -875,7 +891,7 @@
 
       toggleButton.addEventListener("click", () => {
         const videoId = getVideoId();
-        let blacklisted = [...configData.userSettings.blacklistedVideos];
+        let blacklisted = [...APP_STATE.userSettings.blacklistedVideos];
 
         if (blacklisted.includes(videoId)) {
           blacklisted = blacklisted.filter((id) => id !== videoId);
@@ -913,7 +929,7 @@
 
       sortedVideos.forEach(({ key, data }) => {
         const { videoName, videoProgress, saveDate } = data;
-        const videoId = key.replace("Youtube_SaveResume_Progress-", "");
+        const videoId = key.replace(CONSTANTS.STORAGE.ITEM_PREFIX, "");
 
         const videoEl = document.createElement("li");
         videoEl.classList.add("ysrp-video-item");
@@ -1002,7 +1018,7 @@
       const input = document.createElement("input");
       input.type = "number";
       input.min = "0";
-      input.value = configData.userSettings.minDuration;
+      input.value = APP_STATE.userSettings.minDuration;
       input.style.width = "60px";
 
       const suffix = document.createElement("span");
@@ -1011,7 +1027,7 @@
       customInputRow.append(input, suffix);
 
       const updateUIStates = () => {
-        const isCustom = configData.userSettings.enableMinDuration;
+        const isCustom = APP_STATE.userSettings.enableMinDuration;
         if (isCustom) {
           customBtn.classList.add("active");
           alwaysBtn.classList.remove("active");
@@ -1066,7 +1082,7 @@
       intervalInput.type = "number";
       intervalInput.min = "1";
       intervalInput.max = "60";
-      intervalInput.value = configData.userSettings.savingInterval;
+      intervalInput.value = APP_STATE.userSettings.savingInterval;
       intervalInput.style.width = "60px";
 
       const intervalSuffix = document.createElement("span");
@@ -1224,7 +1240,7 @@
       ".last-save-info-container",
     );
     infoElContainers.forEach((container) => {
-      if (configData.userSettings.uiVisible) {
+      if (APP_STATE.userSettings.uiVisible) {
         container.classList.remove("ysrp-hidden");
       } else {
         container.classList.add("ysrp-hidden");
@@ -1233,7 +1249,7 @@
   }
 
   function toggleUiVisibility() {
-    const newValue = !configData.userSettings.uiVisible;
+    const newValue = !APP_STATE.userSettings.uiVisible;
     setUserConfig({ uiVisible: newValue });
     applyUiVisibility();
     registerMenuCommands();
@@ -1242,16 +1258,16 @@
   function registerMenuCommands() {
     if (typeof GM_registerMenuCommand !== "undefined") {
       if (
-        menuCommandId !== null &&
+        APP_STATE.ui.menuCommandId !== null &&
         typeof GM_unregisterMenuCommand !== "undefined"
       ) {
-        GM_unregisterMenuCommand(menuCommandId);
+        GM_unregisterMenuCommand(APP_STATE.ui.menuCommandId);
       }
 
-      const isVisible = configData.userSettings.uiVisible;
+      const isVisible = APP_STATE.userSettings.uiVisible;
       const label = isVisible ? "🚫 Hide Extension UI" : "👁️ Show Extension UI";
 
-      menuCommandId = GM_registerMenuCommand(label, () => {
+      APP_STATE.ui.menuCommandId = GM_registerMenuCommand(label, () => {
         toggleUiVisibility();
       });
     }
@@ -1277,7 +1293,7 @@
   }
 
   async function onChaptersReadyToMount(callback) {
-    await waitForElm('.ytp-chapter-container[style=""]');
+    await waitForElm(CONSTANTS.SELECTORS.CHAPTER_CONTAINER);
     callback();
   }
 
@@ -1286,7 +1302,7 @@
     const fontLink = document.createElement("link");
     Object.assign(fontLink, {
       rel: "stylesheet",
-      href: configData.dependenciesURLs.interFont,
+      href: CONSTANTS.URLS.INTER_FONT,
     });
     head.appendChild(fontLink);
   }
@@ -1325,7 +1341,7 @@
         createScriptURL: (string, sink) => string,
       });
 
-      configData.sanitizer = sanitizer;
+      APP_STATE.sanitizer = sanitizer;
     }
 
     onPlayerElementExist(async () => {
@@ -1338,7 +1354,7 @@
         // No saved progress to restore (or it was already applied).
         // Mark the flag so the saving timer can operate normally and
         // doesn't get stuck in the "Restoring" guard forever.
-        configData.savedProgressAlreadySet = true;
+        APP_STATE.savedProgressAlreadySet = true;
         ysrpLog(
           "initialize: no saved progress to restore, savedProgressAlreadySet = true",
         );
